@@ -1,4 +1,4 @@
-package EZShare;
+package EZShare2;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -11,6 +11,7 @@ import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Random;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -20,9 +21,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import javax.net.ServerSocketFactory;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLServerSocketFactory;
-import javax.net.ssl.SSLSocket;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -52,6 +50,8 @@ public class Server {
 	static String secret = null;
 	static ArrayList<String> serverRecords=new ArrayList<String>();
 	static ArrayList<String> secureServerRecords=new ArrayList<String>();
+	static ArrayList<String> subscribeID=new ArrayList<String>();
+	static HashMap subscribedItem=new HashMap();
 
 		
 	@SuppressWarnings("deprecation")
@@ -160,67 +160,52 @@ public class Server {
 		
 ////////////////////////start to work with initial settings/////////////////////////////
 ////////////////////////from here we create 2 threads//////////
+		ExecutorService twoThread = Executors.newFixedThreadPool(2);
 		
-		ScheduledExecutorService twoThread = Executors.newScheduledThreadPool(2);
+		twoThread.execute(() -> insecureThreadGo());
 		
 		twoThread.execute(() -> secureThreadGo());
-		//twoThread.execute(() -> insecureThreadGo());
-
-		twoThread.schedule(() -> insecureThreadGo(), 500, TimeUnit.MILLISECONDS);
-		
 	}
 	
 	
 	private static void secureThreadGo() {
-		System.setProperty("javax.net.ssl.trustStore", "sks/server.jks");
-	    
-		System.setProperty("javax.net.ssl.keyStore","sks/server.jks");
-		//Password to access the private key from the keystore file
-	    System.setProperty("javax.net.ssl.keyStorePassword","aalt_s");
 		
-	    try{
-	    	SSLServerSocketFactory sslserversocketfactory = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
-			SSLServerSocket sslserversocket = (SSLServerSocket) sslserversocketfactory.createServerSocket(sport);
-			sslserversocket.setNeedClientAuth(true);
-			
+		ServerSocketFactory factory = ServerSocketFactory.getDefault();
+		try(ServerSocket server = factory.createServerSocket(sport)){
 			log.info("Starting the EZshare Server");
 			log.info("using secret: "+Server.secret);
 			log.info("using advertiesd hostname: "+advertisedHostName);
 			log.info("bound to port "+sport);
 			// debugging
-			log.info("****this is secure server");
+			log.info("this is secure server");
 			log.info("started");
 			
 			// This is the thread for exchanging server records between servers
 			//***********************
 			ScheduledExecutorService secureExecutor = Executors.newScheduledThreadPool(2);
 			
-			secureExecutor.scheduleAtFixedRate(() -> secureExe(), 5, exchangeInterval, TimeUnit.SECONDS);
+			secureExecutor.scheduleAtFixedRate(() -> secureExe(), 5, connectionIntervalLimit, TimeUnit.SECONDS);
 			//**********************
 			// Wait for connections.
 			boolean connected = false;
 			long timeLimit = System.currentTimeMillis() + connectionIntervalLimit*1000;
 			
 			while(true){
-				
-				//accept connection from client and creat a sslsocket
-				SSLSocket sslclient = (SSLSocket) sslserversocket.accept();
+				Socket client = server.accept();
 				
 				if (System.currentTimeMillis() < timeLimit && connected) {
 					continue;
 				}
 				
-				// debugging
 				counter++;
-				System.out.println("Secure Server: Client "+counter+": Applying for connection!");
+				System.out.println("Client "+counter+": Applying for connection!");
 				
 				// Start a new thread for a connection
-				secureExecutor.execute(() ->serveSSLClient(sslclient));
+				secureExecutor.execute(() ->serveClient(client, true));
 				
 				connected = true;
 				timeLimit = System.currentTimeMillis() + connectionIntervalLimit*1000;
-			}
-			
+			}				
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -234,15 +219,23 @@ public class Server {
 			log.info("using advertiesd hostname: "+advertisedHostName);
 			log.info("bound to port "+port);
 			// debugging
-			log.info("****this is insecure server");
+			log.info("this is insecure server");
 			log.info("started");
 			
 			// This is the thread for exchanging server records between servers
 			//***********************
-			
-			ScheduledExecutorService secureExecutor = Executors.newScheduledThreadPool(2);
-			
-			secureExecutor.scheduleAtFixedRate(() -> insecureExe(), 5, exchangeInterval, TimeUnit.SECONDS);
+			Thread t2 = new Thread(() -> {
+				try {
+					exchangeServerRec();
+				} catch (UnknownHostException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+			});
+			t2.start();
 			
 			//**********************
 			// Wait for connections.
@@ -256,13 +249,12 @@ public class Server {
 					continue;
 				}
 				
-				// debugging
 				counter++;
-				System.out.println("Insecure Sever : Client "+counter+": Applying for connection!");
+				System.out.println("Client "+counter+": Applying for connection!");
 				// Start a new thread for a connection
+				Thread t = new Thread(() -> serveClient(client, false));
+				t.start();
 				
-				secureExecutor.execute(() ->serveClient(client));
-
 				connected = true;
 				timeLimit = System.currentTimeMillis() + connectionIntervalLimit*1000;
 			}				
@@ -270,65 +262,8 @@ public class Server {
 			e.printStackTrace();
 		}
 	}
-	
-	
-	private static void serveSSLClient(SSLSocket sslclient) {
-		try(SSLSocket clientSocket = sslclient){
-			
-			// The JSON Parser
-			JSONParser parser = new JSONParser();
-			// Input stream
-			DataInputStream input = new DataInputStream(clientSocket.
-					getInputStream());
-			// Output Stream
-		    DataOutputStream output = new DataOutputStream(clientSocket.
-		    		getOutputStream());
-//			    System.out.println("CLIENT: "+input.readUTF());
-//			    output.writeUTF("Server: Hi Client "+counter+" !!!");
-		    
-		    // debugging
-		    String serverName;
-		    serverName = "secure Server **** ";
-			
-		    while(true){
-		    	String message;
-		    	if((message=input.readUTF())!= null){
-		    		// Attempt to convert read data to JSON
-		    		JSONObject command = (JSONObject) parser.parse(message);
-		    		if(debug){
-		    			log.debug(serverName + "RECIEVED: "+command.toJSONString());
-		    		}
-		    		
-		    		// start to check which thread it belongs to
-		    		JSONArray result;
-		    		result = SSLMath.parseCommand(command, output);
-		    		
-		    		
-		    		for(int i=0;i<result.size();i++){
-			    		
-			    		output.writeUTF(((JSONObject)result.get(i)).toJSONString());
-			    		output.flush();	
-			    		if(debug){
-			    			//debugging
-			    			log.debug(serverName + "SENT: "+((JSONObject) result.get(i)).toJSONString());
-			    		}
-		    		}
-		    		break;
-		    	}
-		    }
-		    
-		    output.close();
-    		input.close();
-		    
-		} catch (IOException e) {
-			e.printStackTrace();
-			System.out.println("Wrong I/O, maybe your are trying to connect secure server via insecure socket");
-		} catch (ParseException e1) {
-			e1.printStackTrace();
-		}
-	}
-	
-	private static void serveClient(Socket client) {
+
+	private static void serveClient(Socket client, Boolean isSecure) {
 		try(Socket clientSocket = client){
 			
 			// The JSON Parser
@@ -342,35 +277,81 @@ public class Server {
 //			    System.out.println("CLIENT: "+input.readUTF());
 //			    output.writeUTF("Server: Hi Client "+counter+" !!!");
 		    
-		    // debugging
-		    String serverName;
-			serverName = "Insecure Server **** ";
-			
+		    // Receive more data..
+		    boolean end=false;
+		    boolean subscribeContinue=false;
 		    while(true){
 		    	if(input.available() > 0){
 		    		// Attempt to convert read data to JSON
 		    		JSONObject command = (JSONObject) parser.parse(input.readUTF());
 		    		if(debug){
-		    			log.debug(serverName + "RECIEVED: "+command.toJSONString());
+		    			log.debug("RECIEVED: "+command.toJSONString());
 		    		}
 		    		
+		    		int category=0;
+		    		if(command.containsKey("command")){
+		    			switch((String)command.get("command")){
+		    			case "PUBLISH":
+		    			case "EXCHANGE":
+		    			case "SHARE":
+		    			case "REMOVE": category=1;break;
+		    			case "QUERY":category=2;break;
+		    			case "FETCH":category=3;break;
+		    			case "SUBSCRIBE": category=4;break;
+		    			case "UNSUBSCRIBE": category=5;break;
+		    			default: break;
+		    			}
+		    		}	
 		    		
 		    		// start to check which thread it belongs to
 		    		JSONArray result;
-		    		
-			    	result = Math.parseCommand(command, output);
-		    		
-		    		
-		    		for(int i=0;i<result.size();i++){
-			    		
-			    		output.writeUTF(((JSONObject)result.get(i)).toJSONString());
-			    		output.flush();	
-			    		if(debug){
-			    			//debugging
-			    			log.debug(serverName + "SENT: "+((JSONObject) result.get(i)).toJSONString());
-			    		}
+		    		if (isSecure) {
+			    		result = SSLMath.parseCommand(command, output);
+
+		    		} else {
+			    		result = Math.parseCommand(command, output);
+
 		    		}
-		    		break;
+		    		
+		    		JSONObject subCommand=null;
+		    		for(int i=0;i<result.size();i++){
+			    		if(!result.get(i).toString().equals("{\"endOfTransmit\":true}")){
+			    			JSONObject temp=(JSONObject) result.get(i);
+			    			if(temp.containsKey("response")&&
+			    					temp.get("response").equals("success")&&
+			    					temp.containsKey("id")){
+			    				subCommand=temp;
+			    				
+			    				subscribeContinue=true;
+			    				System.out.println("INTO CONTINUE:"+subscribeContinue);
+			    			}
+			    			output.writeUTF(((JSONObject)result.get(i)).toJSONString());
+			    			output.flush();	
+			    			if(debug)log.debug("SENT: "+((JSONObject) result.get(i)).toJSONString());
+			    		}
+			    		else if(category==0 ||category==1||category==5){
+			    			end=true;
+			    			}else if(category==4&&subscribeContinue){
+			    				//Thread !!!!!
+			    				System.out.println("INTO if!!"+"continue:"+subscribeContinue);
+			    				Thread Subscribe = new Thread(() -> {
+			    					try {
+			    						System.out.println("INTO Thread Subscribe!!");
+			    						doSubscribe(output,command,isSecure);
+			    					} catch (UnknownHostException e) {
+			    						// TODO Auto-generated catch block
+			    						e.printStackTrace();
+			    					} catch (IOException e) {
+			    						// TODO Auto-generated catch block
+			    						e.printStackTrace();
+			    					}
+			    				});
+			    				Subscribe.start();
+			    			}
+			    		}
+		    		
+		    		
+		    		if(end) break;
 		    	}
 		    }
 		    
@@ -382,8 +363,81 @@ public class Server {
 		}
 	}
 
+
 	
-	
+	private static void doSubscribe(DataOutputStream output, JSONObject command,boolean secure) throws IOException {
+		// TODO Auto-generated method stub
+		System.out.println("INTO Method doSubscribe!!");
+		JSONObject raw;
+		if(secure) raw=SSLMath.preProcess(command);
+		else raw=Math.preProcess(command);
+		String id=(String) raw.get("id");
+		subscribeID.add(id);
+		subscribedItem.put(id, (int)0);
+		JSONObject result=new JSONObject();
+		long startTime=System.currentTimeMillis();
+		boolean updateTime=false;
+		if(command.containsKey("relay")&&((boolean)command.get("relay"))==true){
+			JSONObject relaycommand=new JSONObject(command);
+			relaycommand.replace("name", "");
+			relaycommand.replace("description", "");
+			relaycommand.replace("relay", false);
+		}
+		if(secure){
+		while(Server.subscribeID.contains(id)){
+			long time1=System.currentTimeMillis();
+			while(true){
+				if(System.currentTimeMillis()>time1+1000)
+					break;
+			}
+			updateTime=false;
+			for(int i=0;i<Server.resourceList.size();i++){
+				if(startTime<Server.resourceList.get(i).getTime()&&
+						SSLMath.queryMatch(Server.resourceList.get(i),command)){
+					output.writeUTF(      ( new Resource(Server.resourceList.get(i).getObj())    ).toJSON().toJSONString()     );
+					output.flush();
+					subscribedItem.replace(id, (int)subscribedItem.get(id)+1);
+					updateTime=true;
+				}
+			}
+			if(updateTime)
+			startTime=System.currentTimeMillis();
+		}
+		
+		}else{
+			
+			while(Server.subscribeID.contains(id)){
+			//	System.out.println("templateTime:"+startTime);
+				long time1=System.currentTimeMillis();
+				while(true){
+					if(System.currentTimeMillis()>time1+1000)
+						break;
+				}
+				updateTime=false;
+			for(int i=0;i<Server.resourceList.size();i++){
+				if(Math.queryMatch(Server.resourceList.get(i),command)&&
+						startTime<Server.resourceList.get(i).getTime()
+						){
+					output.writeUTF(      ( new Resource(Server.resourceList.get(i).getObj())    ).toJSON().toJSONString()     );
+					output.flush();
+					subscribedItem.replace(id, (int)subscribedItem.get(id)+1);
+					updateTime=true;
+					
+				}
+			}
+			if(updateTime)
+			startTime=System.currentTimeMillis();
+			}
+			
+			
+		}
+		
+		
+		
+	}
+
+
+	////////to update
 	public static void AddOptions(Options options) {
 		options.addOption("debug", false, "Print debut information");
 		options.addOption("secret", true, "Server secret");
@@ -408,43 +462,169 @@ public class Server {
 	 }
 	
 	
+	private static void exchangeSecureServerRec() throws UnknownHostException, IOException {
+		// create a thread that only res
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		Runnable periodicTask = new Runnable() {
+
+			@Override
+			public void run() {
+				// TODO Auto-generated method stub
+				if (secureServerRecords.size() == 0) {
+					
+				} else {
+					
+					int selectedIndex = (new Random()).nextInt(secureServerRecords.size());
+				
+					String host_ip = secureServerRecords.get(selectedIndex);
+					String[] host_ip_arr = host_ip.split(":");
+					String host_name = host_ip_arr[0];
+					int ip_add = Integer.parseInt(host_ip_arr[1]);
+					JSONObject exchangeCommand = new JSONObject();
+					String records = "";
+					for (int i = 0; i<secureServerRecords.size(); i++) {
+						records += secureServerRecords.get(i) + ",";
+					}
+					try {
+						records += InetAddress.getLocalHost().getHostAddress() + ":" + port;
+					} catch (UnknownHostException e1) {
+						// TODO Auto-generated catch block
+						e1.printStackTrace();
+					}
+					exchangeCommand.put("command", "EXCHANGE");
+					exchangeCommand.put("serverList", records);
+					
+					try(Socket randomServer = new Socket(host_name, ip_add)){
+						DataInputStream input = new DataInputStream(randomServer.getInputStream());
+						DataOutputStream output = new DataOutputStream(randomServer.getOutputStream());
+					
+						output.writeUTF(exchangeCommand.toJSONString());
+						output.flush();
+						
+						//System.out.println("Command sent");
+						
+						// Time limit for execution
+						long start = System.currentTimeMillis();
+						long end = start + 5 * 1000;
+						boolean isReachable = false;
+						while(System.currentTimeMillis() < end) {
+							if (input.available() > 0) {
+								isReachable = true;
+								/////////debuging///////////
+								String result = input.readUTF();
+								System.out.println(result);
+							}
+						}
+						if (!isReachable) {
+							secureServerRecords.remove(selectedIndex);
+							//System.out.println("Removed unreachable server-" + serverRecords.get(selectedIndex));
+						}
+						
+					} catch (IOException e) {
+						//e.printStackTrace();
+						//System.out.println("Record invalid!" + serverRecords.size());
+						secureServerRecords.remove(selectedIndex);
+					}
+				}
+			}
+			
+		};
+		executor.scheduleAtFixedRate(periodicTask, 5, exchangeInterval, TimeUnit.SECONDS);
+	}
+	
+	//********************
+	
+	
+	private static void exchangeServerRec() throws UnknownHostException, IOException {
+		
+		// Creates a socket for another server, the socket that will send msg to
+
+		Timer timer = new Timer();
+		TimerTask task = new TimerTask() {
+
+			public void run() {
+				// TODO Auto-generated method stub
+				if (serverRecords.size() == 0) {
+					
+				} else {
+					
+					int selectedIndex = (new Random()).nextInt(serverRecords.size());
+				
+					String host_ip = serverRecords.get(selectedIndex);
+					String[] host_ip_arr = host_ip.split(":");
+					String host_name = host_ip_arr[0];
+					int ip_add = Integer.parseInt(host_ip_arr[1]);
+					JSONObject exchangeCommand = new JSONObject();
+					String records = "";
+					for (int i = 0; i<serverRecords.size(); i++) {
+						records += serverRecords.get(i) + ",";
+					}
+					try {
+						records += InetAddress.getLocalHost().getHostAddress() + ":" + port;
+					} catch (UnknownHostException e1) {
+						// TODO Auto-generated catch block
+						e1.printStackTrace();
+					}
+					exchangeCommand.put("command", "EXCHANGE");
+					exchangeCommand.put("serverList", records);
+					
+					try(Socket randomServer = new Socket(host_name, ip_add)){
+						DataInputStream input = new DataInputStream(randomServer.getInputStream());
+						DataOutputStream output = new DataOutputStream(randomServer.getOutputStream());
+					
+						output.writeUTF(exchangeCommand.toJSONString());
+						output.flush();
+						
+						//System.out.println("Command sent");
+						
+						// Time limit for execution
+						long start = System.currentTimeMillis();
+						long end = start + 5 * 1000;
+						boolean isReachable = false;
+						while(System.currentTimeMillis() < end) {
+							if (input.available() > 0) {
+								isReachable = true;
+								String result = input.readUTF();
+							
+							}
+						}
+						if (!isReachable) {
+							serverRecords.remove(selectedIndex);
+							//System.out.println("Removed unreachable server-" + serverRecords.get(selectedIndex));
+						}
+						
+					} catch (IOException e) {
+						//e.printStackTrace();
+						//System.out.println("Record invalid!" + serverRecords.size());
+						serverRecords.remove(selectedIndex);
+					}
+				}
+				///
+			}
+			
+		};
+		timer.schedule(task, 0, exchangeInterval * 1000);
+	}
+	
+	
 	private static void secureExe() {
-		// debugging
-		String serverName = "Secure Server";
-		int serverListSize = secureServerRecords.size();
-		System.out.println("1: " + serverName + " has server records of size: " + serverListSize);
-		
-		String secureList = "";
-		for (int k = 0; k < serverListSize; k++) {
-			secureList += secureServerRecords.get(k) + ", ";
-		}
-		
-		System.out.println("2: " + serverName + " has serverList:" + secureList);
-		
 		if (secureServerRecords.size() == 0) {
-			// debugging
-			System.out.println("3: " + serverName + " : No servers to excahnge");
-		
+			
 		} else {
 			
 			int selectedIndex = (new Random()).nextInt(secureServerRecords.size());
-			
+		
 			String host_ip = secureServerRecords.get(selectedIndex);
-			// debugging
-			System.out.println("4: " + serverName + " selected server: " + host_ip);
-			
 			String[] host_ip_arr = host_ip.split(":");
 			String host_name = host_ip_arr[0];
 			int ip_add = Integer.parseInt(host_ip_arr[1]);
-			
 			JSONObject exchangeCommand = new JSONObject();
 			String records = "";
 			for (int i = 0; i<secureServerRecords.size(); i++) {
 				records += secureServerRecords.get(i) + ",";
 			}
 			try {
-				// add local address
-				records += InetAddress.getLocalHost().getHostAddress() + ":" + sport;
+				records += InetAddress.getLocalHost().getHostAddress() + ":" + port;
 			} catch (UnknownHostException e1) {
 				// TODO Auto-generated catch block
 				e1.printStackTrace();
@@ -469,50 +649,31 @@ public class Server {
 					if (input.available() > 0) {
 						isReachable = true;
 						String result = input.readUTF();
-						// debugging
-						System.out.println("5:" + serverName + " : Received from other server: " + result);
+					
 					}
 				}
 				if (!isReachable) {
 					secureServerRecords.remove(selectedIndex);
-					// debugging
-					System.out.println("6: " + serverName + ": Removed unreachable server: " + secureServerRecords.get(selectedIndex));
+					//System.out.println("Removed unreachable server-" + serverRecords.get(selectedIndex));
 				}
 				
 			} catch (IOException e) {
-				e.printStackTrace();
-				
+				//e.printStackTrace();
+				//System.out.println("Record invalid!" + serverRecords.size());
 				secureServerRecords.remove(selectedIndex);
-				// debugging
-				System.out.println("7: " + serverName + ": Removed unreachable server: " + secureServerRecords.get(selectedIndex));
 			}
 		}
 	}
 	
 	
 	private static void insecureExe() {
-		
-		String serverName = "Insecure Server";
-		// debugging
-		int serverListSize = serverRecords.size();
-		System.out.println("1: " + serverName + " has server records of size: " + serverListSize);
-		
-		String secureList = "";
-		for (int k = 0; k < serverListSize; k++) {
-			secureList += serverRecords.get(k);
-		}
-		System.out.println("2: " + serverName + " has serverList:" + secureList);
-		
 		if (serverRecords.size() == 0) {
-			// debugging
-			System.out.println("3: " + serverName + " : No servers to excahnge");
+			
 		} else {
 			
 			int selectedIndex = (new Random()).nextInt(serverRecords.size());
 		
 			String host_ip = serverRecords.get(selectedIndex);
-			// debugging
-			System.out.println("4: " + serverName + "selected server: " + host_ip);
 			String[] host_ip_arr = host_ip.split(":");
 			String host_name = host_ip_arr[0];
 			int ip_add = Integer.parseInt(host_ip_arr[1]);
@@ -547,20 +708,18 @@ public class Server {
 					if (input.available() > 0) {
 						isReachable = true;
 						String result = input.readUTF();
-						System.out.println(serverName + " : Received from other server: " + result);
+					
 					}
 				}
 				if (!isReachable) {
 					serverRecords.remove(selectedIndex);
-					// debugging
-					System.out.println("6: " + serverName + ": Removed unreachable server: " + serverRecords.get(selectedIndex));
+					//System.out.println("Removed unreachable server-" + serverRecords.get(selectedIndex));
 				}
 				
 			} catch (IOException e) {
-				e.printStackTrace();
+				//e.printStackTrace();
+				//System.out.println("Record invalid!" + serverRecords.size());
 				serverRecords.remove(selectedIndex);
-				// debugging
-				System.out.println("7: " + serverName + " removed unreachable server: " + serverRecords.get(selectedIndex));
 			}
 		}
 	}
