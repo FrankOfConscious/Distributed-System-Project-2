@@ -1,4 +1,4 @@
-package EZShare;
+package EZShare2;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -66,15 +66,30 @@ public class Math {
 				break;
 			case "SUBSCRIBE":
 				command=preProcess(raw);
-				//result=subscribeJSON(command);
-//				System.out.println("Current ResourceList size:"+result.size());
+				result=subscribeJSON(command);
+				break;
+			case "UNSUBSCRIBE":
+				command.put("command", "UNSUBSCRIBE");
+				command.put("id", raw.get("id"));
+				
+				Server.subscribeID.remove(raw.get("id"));
+				long time=System.currentTimeMillis();
+				while(true){
+					if(System.currentTimeMillis()>time+600){
+						break;
+					}
+				}
+				JSONObject obj=new JSONObject();
+				obj.put("resultSize", Server.subscribedItem.get(raw.get("id")));
+				Server.subscribedItem.remove(raw.get("id"));
+				result.add(obj);
 				break;
 			default:
 				//return invalid command
-				JSONObject obj=new JSONObject();
-				obj.put("response", "error");
-				obj.put("errorMessage", "invalid command");
-				result.add(obj);
+				JSONObject obj3=new JSONObject();
+				obj3.put("response", "error");
+				obj3.put("errorMessage", "invalid command");
+				result.add(obj3);
 				break;
 			}
 		} else {
@@ -84,10 +99,13 @@ public class Math {
 			obj.put("errorMessage", "missing or incorrect type for command");
 			result.add(obj);
 		}
+		JSONObject end=new JSONObject();
+		end.put("endOfTransmit", true);
+		result.add(end);
 		return result;
 	}
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	private static JSONObject preProcess(JSONObject command) {
+	static JSONObject preProcess(JSONObject command) {
 		// TODO Auto-generated method stub
 	
 		if(command.containsKey("command")){
@@ -288,9 +306,104 @@ public class Math {
 		
 				return commandObj;
 			}
+			case("SUBSCRIBE"):{
+				String name = "";
+				if (((HashMap)command.get("resourceTemplate")).containsKey("name")){
+					name = (String) ((HashMap)command.get("resourceTemplate")).get("name");
+				}
+				String id = "";
+				if ((command.containsKey("id"))){
+					id = (String) (command.get("id"));
+				}
+				ArrayList<String> tags=new ArrayList<String>();
+				if(((HashMap)command.get("resourceTemplate")).containsKey("tags")){
+					tags=(ArrayList<String>) ((HashMap)command.get("resourceTemplate")).get("tags");
+				}
+				String des = "";
+				if (((HashMap)command.get("resourceTemplate")).containsKey("description")) {
+					des = (String) ((HashMap)command.get("resourceTemplate")).get("description");
+				}
+				String uri = "";
+				if (((HashMap)command.get("resourceTemplate")).containsKey("uri")) {
+					uri = (String) ((HashMap)command.get("resourceTemplate")).get("uri");
+				}
+				String channel = "";
+				if (((HashMap)command.get("resourceTemplate")).containsKey("channel")) {
+					channel = (String) ((HashMap)command.get("resourceTemplate")).get("channel");
+				}
+				String owner = "";
+				if (((HashMap)command.get("resourceTemplate")).containsKey("owner")) {
+					owner = (String) ((HashMap)command.get("resourceTemplate")).get("owner");
+					if(owner.equals(".classpath")) owner="*";
+				}
+				boolean relay = false;
+				if (command.containsKey("relay")) {
+					relay = command.get("relay").equals("true")?true:false;
+				}
+				JSONObject resourceTemplate = new JSONObject();
+				JSONObject commandObj = new JSONObject();
+				resourceTemplate.put("tags", tags);
+				resourceTemplate.put("name", name);
+				resourceTemplate.put("description", des);
+				resourceTemplate.put("uri", uri);
+				resourceTemplate.put("channel", channel);
+				resourceTemplate.put("owner", owner);
+				resourceTemplate.put("ezserver", null);
+				commandObj.put("command", "SUBSCRIBE");
+				commandObj.put("relay", relay);
+				commandObj.put("id", id);
+				commandObj.put("resourceTemplate", resourceTemplate);
+				return commandObj;
+				
+			}
 			//**LIAM**
 			}
+		}else{
+
+		String name = "";
+		if (((HashMap)command.get("resourceTemplate")).containsKey("name")){
+			name = (String) ((HashMap)command.get("resourceTemplate")).get("name");
 		}
+		ArrayList<String> tags=new ArrayList<String>();
+		if(((HashMap)command.get("resourceTemplate")).containsKey("tags")){
+			tags=(ArrayList<String>) ((HashMap)command.get("resourceTemplate")).get("tags");
+		}
+		String des = "";
+		if (((HashMap)command.get("resourceTemplate")).containsKey("description")) {
+			des = (String) ((HashMap)command.get("resourceTemplate")).get("description");
+		}
+		String uri = "";
+		if (((HashMap)command.get("resourceTemplate")).containsKey("uri")) {
+			uri = (String) ((HashMap)command.get("resourceTemplate")).get("uri");
+		}
+		String channel = "";
+		if (((HashMap)command.get("resourceTemplate")).containsKey("channel")) {
+			channel = (String) ((HashMap)command.get("resourceTemplate")).get("channel");
+		}
+		String owner = "";
+		if (((HashMap)command.get("resourceTemplate")).containsKey("owner")) {
+			owner = (String) ((HashMap)command.get("resourceTemplate")).get("owner");
+			if(owner.equals(".classpath")) owner="*";
+		}
+		boolean relay = false;
+		if (command.containsKey("relay")) {
+			relay = command.get("relay").equals("true")?true:false;
+		}
+		JSONObject resourceTemplate = new JSONObject();
+		JSONObject commandObj = new JSONObject();
+		resourceTemplate.put("tags", tags);
+		resourceTemplate.put("name", name);
+		resourceTemplate.put("description", des);
+		resourceTemplate.put("uri", uri);
+		resourceTemplate.put("channel", channel);
+		resourceTemplate.put("owner", owner);
+		resourceTemplate.put("ezserver", null);
+		commandObj.put("command", "QUERY");
+		commandObj.put("relay", relay);
+		commandObj.put("resourceTemplate", resourceTemplate);
+		return commandObj;
+		
+	}		
 		
 		return null;
 	}
@@ -334,6 +447,7 @@ public class Math {
 				//this checks if there is resource with same channel, uri and owner, replace the obj
 					if (Server.resourceList.get(i).ifOverwrites(command)) {
 						Server.resourceList.get(i).overwrites(command);
+						//Server.resourceList.get(i).setTime();
 						result.put("response", "success");/////
 						array.add(result);
 						debug(array);
@@ -614,6 +728,35 @@ public class Math {
 		
 		
 	}
+	private static JSONArray subscribeJSON(JSONObject command){	
+		if(command.containsKey("resourceTemplate") && command.containsKey("id") && command.get("id")!=null&&(!command.get("id").equals(""))){
+			if(((HashMap) command.get("resourceTemplate")).get("owner").equals("*")){
+				JSONObject obj=new JSONObject();
+				obj.put("response", "error");
+				obj.put("errorMessage", "invalid resourceTemplate");
+				JSONArray result=new JSONArray();
+				result.add(obj);
+				debug(result);
+				return result;
+			}else{
+				JSONObject obj1=new JSONObject();
+				obj1.put("response", "success");
+				obj1.put("id", command.get("id"));
+				JSONArray formatResult=new JSONArray();
+				formatResult.add(obj1);
+				return formatResult;
+			}			
+		}else{
+			JSONObject obj=new JSONObject();
+			obj.put("response", "error");
+			obj.put("errorMessage", "missing resourceTemplate");
+			JSONArray result=new JSONArray();
+			result.add(obj);
+			debug(result);
+			return result;
+			}
+
+	}
 	
 	private static JSONArray fetchJSON(JSONObject command, DataOutputStream output){
 		JSONArray result = new JSONArray();
@@ -775,17 +918,7 @@ public class Math {
 			
 		}
 	private static JSONArray exchangeJSON(JSONObject command){
-		String currentHost = "";
-		try {
-			currentHost = InetAddress.getLocalHost().getHostAddress();
-		} catch (UnknownHostException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			// debugging
-			System.out.println("cannot get current machine's ip");
-		}
-		String serverPort = String.valueOf(Server.port);
-		
+	
 		if((!command.containsKey("serverList"))||(command.get("serverList")=="")){
 			JSONObject obj=new JSONObject();
 			obj.put("response", "error");
@@ -801,9 +934,13 @@ public class Math {
 				String [] hostPort=RecordArray[i].split(":");
 				String hostName=hostPort[0];
 				String port=hostPort[1];
-				if(hostName.equals(currentHost)&& port.equals(serverPort)) {
-					continue;
-				}
+				try{
+ 					if(hostName == InetAddress.getLocalHost().getHostAddress() && port == String.valueOf(Server.port)) {
+ 						continue;
+ 					}
+ 				} catch (UnknownHostException e1) {
+ 					e1.printStackTrace();
+ 				}
 				
 				if(!isPort(port)){			
 					JSONObject obj=new JSONObject();
@@ -877,7 +1014,7 @@ public class Math {
 		return false;
 	}
 		
-	  private static boolean queryMatch(KeyTuple Tuple, JSONObject command) {
+	  static boolean queryMatch(KeyTuple Tuple, JSONObject command) {
 		  
 		  // TODO Auto-generated method stub
 		  boolean[] rules=new boolean[11];
